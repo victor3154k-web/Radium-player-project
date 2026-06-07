@@ -1,0 +1,6 @@
+{
+  "name": "Tech Radium",
+  "description": "Leitor Ultra HD otimizado no estilo de organização do YouTube. Interface moderna na cor Azul Trovão, ideal para reprodução móvel, controles por gestos intuitivos e legendas totalmente customizáveis offline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
