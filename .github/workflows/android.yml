@@ -1,0 +1,60 @@
+name: Radium Player APK Build
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. baixar código
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 3. instalar dependências
+      - name: Install dependencies
+        run: npm install
+
+      # 4. build Vite (gera dist/)
+      - name: Build web app
+        run: npm run build
+
+      # 5. instalar Capacitor (garantia no CI)
+      - name: Install Capacitor
+        run: npm install @capacitor/core @capacitor/cli
+
+      # 6. sync Capacitor → Android
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      # 7. Java 17 (OBRIGATÓRIO pro Gradle)
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 8. dar permissão pro Gradle
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      # 9. build APK Debug
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      # 10. salvar APK como download
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadiumPlayer-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
