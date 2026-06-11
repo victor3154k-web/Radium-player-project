@@ -37,7 +37,8 @@ import {
   Plus,
   Battery,
   BatteryCharging,
-  Zap
+  Zap,
+  Minimize2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseSubtitles, SAMPLE_SUBTITLES_PT } from './utils/subtitleParser';
@@ -52,10 +53,65 @@ import {
 
 export default function App() {
   // --- Playlist Estilo Gerenciador de Arquivos do Usuário ---
-  const [files, setFiles] = useState<PlaybackFile[]>([]);
+  const [files, setFiles] = useState<PlaybackFile[]>(() => {
+    const saved = localStorage.getItem('radium_player_files');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error("Erro ao ler radium_player_files do localStorage:", e);
+      }
+    }
+    // Default fallback playlist (example files) so it's not empty!
+    return [
+      {
+        name: "Big Buck Bunny (Exemplo)",
+        url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        extension: ".mp4",
+        isExample: true,
+        duration: 596,
+        sizeMB: 10.5,
+        folder: "Exemplos"
+      },
+      {
+        name: "Sintel - Trailer (Exemplo)",
+        url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
+        extension: ".mp4",
+        isExample: true,
+        duration: 52,
+        sizeMB: 3.2,
+        folder: "Exemplos"
+      },
+      {
+        name: "Tears of Steel (Exemplo)",
+        url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+        extension: ".mp4",
+        isExample: true,
+        duration: 734,
+        sizeMB: 19.8,
+        folder: "Ficção Científica"
+      },
+      {
+        name: "Elephants Dream (Exemplo)",
+        url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+        extension: ".mp4",
+        isExample: true,
+        duration: 653,
+        sizeMB: 15.4,
+        folder: "Animação"
+      }
+    ];
+  });
 
   // --- Core States ---
   const [currentFile, setCurrentFile] = useState<PlaybackFile | undefined>(undefined);
+  const [isBlobExpired, setIsBlobExpired] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [showFsOverlay, setShowFsOverlay] = useState<boolean>(true);
+  const [showFsMenu, setShowFsMenu] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showSearch, setShowSearch] = useState<boolean>(false);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
@@ -112,9 +168,23 @@ export default function App() {
   // --- Custom Extension & Splash States ---
   const [isSplashLoading, setIsSplashLoading] = useState<boolean>(true);
   const [showExtensionModal, setShowExtensionModal] = useState<boolean>(false);
-  const [allowedExtensions, setAllowedExtensions] = useState<string[]>(['.mp4', '.mkv', '.webm', '.mkk', '.avi', '.mov']);
+  const [allowedExtensions, setAllowedExtensions] = useState<string[]>(() => {
+    const saved = localStorage.getItem('radium_player_allowed_extensions');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error("Erro ao ler radium_player_allowed_extensions do localStorage:", e);
+      }
+    }
+    return ['.mp4', '.mkv', '.webm', '.mkk', '.avi', '.mov'];
+  });
   const [newExtensionInput, setNewExtensionInput] = useState<string>('');
   const [performanceProfile, setPerformanceProfile] = useState<PerformanceProfile>('balanced');
+  const isCurrentExtensionBlocked = currentFile ? !allowedExtensions.includes(currentFile.extension.toLowerCase()) : false;
 
   useEffect(() => {
     const splashTimer = setTimeout(() => {
@@ -122,6 +192,58 @@ export default function App() {
     }, 2200);
     return () => clearTimeout(splashTimer);
   }, []);
+
+  // Salvando a lista de arquivos no localStorage
+  useEffect(() => {
+    localStorage.setItem('radium_player_files', JSON.stringify(files));
+  }, [files]);
+
+  // Salvando as extensões de arquivo ativas no localStorage
+  useEffect(() => {
+    localStorage.setItem('radium_player_allowed_extensions', JSON.stringify(allowedExtensions));
+  }, [allowedExtensions]);
+
+  // Se a extensão do arquivo atual for desativada, pausamos a reprodução imediatamente
+  useEffect(() => {
+    if (isCurrentExtensionBlocked && isPlaying) {
+      setIsPlaying(false);
+      triggerGestureFeedback('zoom', 'Formato Desativado!');
+    }
+  }, [isCurrentExtensionBlocked, isPlaying]);
+
+  // Se o decodificador mudar para SW com velocidade > 1.5, reduz para 1.5 automaticamente
+  useEffect(() => {
+    if (decoderMode === 'SW' && playbackSpeed > 1.5) {
+      handleSpeedChange(1.5);
+    }
+  }, [decoderMode, playbackSpeed]);
+
+  // Sincronizando estado de tela cheia nativa
+  useEffect(() => {
+    const handleFsChange = () => {
+      const activeFs = !!document.fullscreenElement;
+      setIsFullscreen(activeFs);
+      if (activeFs) {
+        setShowFsOverlay(true);
+        setShowFsMenu(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+    };
+  }, []);
+
+  // Ocultar automaticamente as opções de tela cheia se estiver reproduzindo e sem interação
+  useEffect(() => {
+    if (!isFullscreen || !isPlaying || !showFsOverlay) return;
+    const timer = setTimeout(() => {
+      if (!showFsMenu) {
+        setShowFsOverlay(false);
+      }
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [isFullscreen, isPlaying, showFsOverlay, showFsMenu]);
 
   const handleAddExtension = (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,6 +275,7 @@ export default function App() {
   const floatingVideoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
+  const relinkInputRef = useRef<HTMLInputElement | null>(null);
 
   // --- Double click / touch tracker for gesture seek delay ---
   const gestureTimeoutRef = useRef<number | null>(null);
@@ -216,11 +339,30 @@ export default function App() {
   };
 
   // --- Handle Media Selection ---
-  const selectFileToPlay = (file: PlaybackFile) => {
+  const selectFileToPlay = async (file: PlaybackFile) => {
+    // Fast preemptive check if the blob URL is actually valid/reachable locally
+    let isValid = true;
+    if (file.url.startsWith('blob:')) {
+      try {
+        await fetch(file.url, { method: 'HEAD' });
+      } catch (e) {
+        isValid = false;
+      }
+    }
+
+    if (!isValid) {
+      setCurrentFile(file);
+      setIsBlobExpired(true);
+      setIsPlaying(false);
+      triggerGestureFeedback('zoom', `Arquivo desconectado`);
+      return;
+    }
+
     setCurrentFile(file);
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(file.duration || 120);
+    setIsBlobExpired(false);
 
     const activeVideo = isFloatingPip ? floatingVideoRef.current : videoRef.current;
     if (activeVideo) {
@@ -247,6 +389,13 @@ export default function App() {
 
     const splitName = file.name.split('.');
     const ext = '.' + splitName.pop()?.toLowerCase();
+
+    // STRICT EXTENSION ENFORCEMENT
+    if (!allowedExtensions.includes(ext)) {
+      triggerGestureFeedback('zoom', `Bloqueado: Formato ${ext}`);
+      setShowExtensionModal(true);
+      return;
+    }
 
     // Re-create Blob with video/mp4 standard media type if renamed to .mkk to allow correct browser decoder playback
     let processedFile: File | Blob = file;
@@ -310,6 +459,54 @@ export default function App() {
       }
     };
     reader.readAsText(file);
+  };
+
+  // --- Re-link File Handler ---
+  const handleRelinkFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentFile) return;
+
+    e.target.value = '';
+
+    const splitName = file.name.split('.');
+    const ext = '.' + splitName.pop()?.toLowerCase();
+
+    // STRICT EXTENSION ENFORCEMENT
+    if (!allowedExtensions.includes(ext)) {
+      triggerGestureFeedback('zoom', `Bloqueado: Formato ${ext}`);
+      setShowExtensionModal(true);
+      return;
+    }
+
+    let processedFile: File | Blob = file;
+    if (ext === '.mkk') {
+      processedFile = new Blob([file], { type: 'video/mp4' });
+    }
+
+    const fileUrl = URL.createObjectURL(processedFile);
+    const sizeKBOrMB = parseFloat((file.size / (1024 * 1024)).toFixed(2));
+
+    const updatedFile = {
+      ...currentFile,
+      url: fileUrl,
+      sizeMB: sizeKBOrMB
+    };
+
+    setFiles(prev => prev.map(f => f.name === currentFile.name ? updatedFile : f));
+    setCurrentFile(updatedFile);
+    setIsBlobExpired(false);
+    setIsPlaying(true);
+
+    const activeVideo = isFloatingPip ? floatingVideoRef.current : videoRef.current;
+    if (activeVideo) {
+      activeVideo.src = fileUrl;
+      activeVideo.load();
+      setTimeout(() => {
+        activeVideo.play().catch(() => {});
+      }, 100);
+    }
+
+    triggerGestureFeedback('brightness', 'Vídeo Re-sincronizado!');
   };
 
   // --- Wheel Action trackpad Zoom ---
@@ -398,6 +595,13 @@ export default function App() {
 
   const handleSpeedChange = (mult: number) => {
     if (isLocked) return;
+    if (decoderMode === 'SW' && mult > 1.5) {
+      triggerGestureFeedback('zoom', 'SW Mode: Max 1.5x (Poupar Bateria)');
+      setPlaybackSpeed(1.5);
+      if (videoRef.current) videoRef.current.playbackRate = 1.5;
+      if (floatingVideoRef.current) floatingVideoRef.current.playbackRate = 1.5;
+      return;
+    }
     setPlaybackSpeed(mult);
     if (videoRef.current) {
       videoRef.current.playbackRate = mult;
@@ -537,6 +741,13 @@ export default function App() {
       };
       reader.readAsText(file);
     } else {
+      // STRICT EXTENSION ENFORCEMENT
+      if (!allowedExtensions.includes(ext)) {
+        triggerGestureFeedback('zoom', `Bloqueado: Formato ${ext}`);
+        setShowExtensionModal(true);
+        return;
+      }
+
       // Re-create Blob with video/mp4 standard media type if renamed to .mkk to allow correct browser decoder playback
       let processedFile: File | Blob = file;
       if (ext === '.mkk') {
@@ -732,6 +943,32 @@ export default function App() {
                 }}
               />
 
+              {/* DECODER MODE STATUS CHIP - Optimized for Capacitor Webview */}
+              {currentFile && (
+                <div className="absolute top-4 left-4 z-[21] flex items-center gap-1.5 pointer-events-none select-none">
+                  <span className={`px-2.5 py-1 rounded-md text-[9px] font-bold font-mono tracking-wider uppercase border flex items-center gap-1 shadow-lg backdrop-blur-sm ${
+                    decoderMode === 'HW+'
+                      ? 'bg-emerald-950/90 text-emerald-400 border-emerald-800/60 animate-pulse'
+                      : decoderMode === 'SW'
+                      ? 'bg-[#0a0a0c]/90 text-zinc-400 border-zinc-800'
+                      : 'bg-indigo-950/90 text-indigo-400 border-indigo-900/60'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${
+                      decoderMode === 'HW+'
+                        ? 'bg-emerald-400'
+                        : decoderMode === 'SW'
+                        ? 'bg-zinc-500'
+                        : 'bg-indigo-400'
+                    }`} />
+                    {decoderMode === 'HW+' ? 'HW+ Ativo' : decoderMode === 'SW' ? 'SW Decoder' : 'HW Decoder'}
+                  </span>
+                  
+                  <span className="hidden sm:inline-block px-2 py-1 rounded-md text-[9px] font-semibold font-sans bg-black/80 text-zinc-300 border border-white/5 shadow-md backdrop-blur-sm">
+                    Capacitor OK
+                  </span>
+                </div>
+              )}
+
               {/* Dynamic Gesture Feedback HUD Overlay */}
               <AnimatePresence>
                 {showGestureModal && (
@@ -786,6 +1023,54 @@ export default function App() {
                       <Maximize className="w-3.5 h-3.5" /> Restaurar Player
                     </button>
                   </div>
+                ) : isBlobExpired ? (
+                  <div className="absolute inset-0 bg-[#020205] flex flex-col items-center justify-center gap-4 text-center p-6 z-[16] pointer-events-auto">
+                    <div className="w-12 h-12 rounded-full bg-red-950/45 border border-red-900/60 flex items-center justify-center text-red-500 shadow-xl shadow-red-950/10">
+                      <Film className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <div className="flex flex-col gap-1 max-w-sm">
+                      <span className="text-sm font-semibold text-slate-100 font-sans">Arquivo local desconectado</span>
+                      <span className="text-[11.5px] text-zinc-500 font-sans leading-relaxed">Vídeos do seu dispositivo precisam ser selecionados novamente por segurança do navegador após fechar o app.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        relinkInputRef.current?.click();
+                      }}
+                      className="px-4 py-2 bg-white hover:bg-zinc-200 text-black font-semibold text-xs rounded-full transition-all flex items-center gap-1.5 shadow-lg shadow-white/5 active:scale-95 cursor-pointer font-sans"
+                    >
+                      <Upload className="w-3.5 h-3.5" /> Vincular Novamente
+                    </button>
+                    <input
+                      type="file"
+                      ref={relinkInputRef}
+                      onChange={handleRelinkFile}
+                      accept="video/*"
+                      className="hidden"
+                    />
+                  </div>
+                ) : isCurrentExtensionBlocked ? (
+                  <div className="absolute inset-0 bg-[#020205] flex flex-col items-center justify-center gap-4 text-center p-6 z-[16] pointer-events-auto">
+                    <div className="w-12 h-12 rounded-full bg-yellow-950/45 border border-yellow-900/60 flex items-center justify-center text-yellow-500 shadow-xl shadow-yellow-950/10">
+                      <Lock className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <div className="flex flex-col gap-1 max-w-md">
+                      <span className="text-sm font-semibold text-yellow-500 uppercase tracking-widest text-[10px] font-mono">Modo Rígido Ativo</span>
+                      <span className="text-base font-bold text-slate-100 font-sans mt-0.5">Formato {currentFile?.extension.toUpperCase()} Bloqueado</span>
+                      <span className="text-[12px] text-zinc-500 font-sans leading-relaxed">Este player está em modo rígido. Para reproduzir esse vídeo, ative a extensão correspondente em suas configurações para fins de decodificação e segurança.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowExtensionModal(true);
+                      }}
+                      className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-black font-semibold text-xs rounded-full transition-all flex items-center gap-1.5 shadow-lg shadow-yellow-500/15 active:scale-95 cursor-pointer font-sans"
+                    >
+                      <Sliders className="w-3.5 h-3.5" /> Liberar Extensão
+                    </button>
+                  </div>
                 ) : (
                   <video
                     ref={videoRef}
@@ -804,8 +1089,25 @@ export default function App() {
                       }
                     }}
                     onPause={() => setIsPlaying(false)}
+                    onError={(e) => {
+                      const err = e.currentTarget.error;
+                      // Only mark as expired/disconnected if the check has a real error code (like code 4: MEDIA_ERR_SRC_NOT_SUPPORTED)
+                      if (err && err.code === 4 && currentFile && currentFile.url && currentFile.url.startsWith('blob:')) {
+                        // Fast fetch double check to avoid any accidental false positives on transition
+                        fetch(currentFile.url, { method: 'HEAD' })
+                          .catch(() => {
+                            setIsBlobExpired(true);
+                            setIsPlaying(false);
+                          });
+                      }
+                    }}
                     loop={isLooping}
                     playsInline
+                    style={{
+                      transform: decoderMode === 'HW+' ? 'translate3d(0, 0, 0)' : 'none',
+                      filter: decoderMode === 'HW+' ? 'contrast(1.08) saturate(1.04) brightness(1.01)' : 'none',
+                      imageRendering: decoderMode === 'HW+' ? 'pixelated' : 'auto'
+                    } as React.CSSProperties}
                     className={`w-full h-full pointer-events-auto ${
                       aspectRatio === 'stretch' ? 'object-fill' :
                       aspectRatio === 'zoom' ? 'object-cover' :
@@ -882,8 +1184,200 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Backing single-click overlay target to toggle HUD overlays transparency */}
+              {currentFile && !isFloatingPip && !isBlobExpired && (
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowFsOverlay(prev => !prev);
+                    if (showFsMenu) setShowFsMenu(false);
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    handleDoubleTapAction(e);
+                  }}
+                  className="absolute inset-0 z-[12] cursor-pointer"
+                />
+              )}
 
+              {/* Fullscreen Overlay HUD Controls */}
+              {isFullscreen && showFsOverlay && !isFloatingPip && !isBlobExpired && (
+                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/20 to-black/95 z-[14] pointer-events-none flex flex-col justify-between p-6">
+                  {/* Top controls row */}
+                  <div className="flex items-center justify-between w-full pointer-events-auto">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFullScreen();
+                        }}
+                        className="p-2.5 rounded-full bg-black/60 border border-white/10 hover:bg-neutral-900 text-white transition-all cursor-pointer active:scale-95"
+                        title="Minimizar (Sair da Tela Cheia)"
+                      >
+                        <Minimize2 className="w-5 h-5" />
+                      </button>
+                      <span className="text-sm font-semibold truncate max-w-[200px] sm:max-w-md font-sans text-neutral-200">
+                        {currentFile?.name}
+                      </span>
+                    </div>
+                    
+                    {/* Three dots option */}
+                    <div className="relative">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowFsMenu(!showFsMenu);
+                        }}
+                        className={`p-2.5 rounded-full border transition-all cursor-pointer active:scale-95 ${
+                          showFsMenu ? 'bg-white text-black border-white' : 'bg-black/60 border border-white/10 text-white hover:bg-neutral-900'
+                        }`}
+                        title="Mais opções"
+                      >
+                        <MoreVertical className="w-5 h-5" />
+                      </button>
 
+                      {/* Dropdown Menu */}
+                      <AnimatePresence>
+                        {showFsMenu && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                            className="absolute right-0 mt-3 w-64 bg-zinc-950/95 backdrop-blur-md border border-neutral-800 rounded-2xl shadow-2xl p-4 flex flex-col gap-4 z-[50]"
+                          >
+                            {/* Loop Option */}
+                            <div className="flex items-center justify-between border-b border-neutral-900 pb-2.5">
+                              <span className="text-xs font-semibold font-sans text-neutral-300">Repetir (Loop)</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setIsLooping(!isLooping);
+                                  triggerGestureFeedback('zoom', isLooping ? 'Loop Desativado' : 'Loop Ativado');
+                                }}
+                                className={`px-3 py-1 text-[10px] font-bold rounded-full uppercase transition-all cursor-pointer ${
+                                  isLooping ? 'bg-white text-black font-extrabold' : 'bg-zinc-900 text-zinc-400 border border-neutral-800'
+                                }`}
+                              >
+                                {isLooping ? 'ON' : 'OFF'}
+                              </button>
+                            </div>
+
+                            {/* Playback Speed Option */}
+                            <div className="flex flex-col gap-1 border-b border-neutral-900 pb-2.5">
+                              <span className="text-xs font-semibold font-sans text-neutral-400">Velocidade</span>
+                              <div className="grid grid-cols-4 gap-1.5 mt-1.5">
+                                {[0.5, 1.0, 1.5, 2.0].map((rate) => (
+                                  <button
+                                    key={rate}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSpeedChange(rate);
+                                    }}
+                                    className={`py-1 text-[9px] font-bold font-mono rounded-lg transition-all cursor-pointer border ${
+                                      playbackSpeed === rate
+                                        ? 'bg-white text-black border-white'
+                                        : 'bg-zinc-900 text-zinc-400 border-neutral-800 hover:text-white'
+                                    }`}
+                                  >
+                                    {rate}x
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Decoder Option */}
+                            <div className="flex flex-col gap-1 border-b border-neutral-900 pb-2.5">
+                              <span className="text-xs font-semibold font-sans text-neutral-400">Decoder</span>
+                              <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                                {(['HW', 'HW+', 'SW'] as const).map((mode) => (
+                                  <button
+                                    key={mode}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDecoderMode(mode);
+                                    }}
+                                    className={`py-1 text-[9px] font-bold font-mono rounded-lg transition-all cursor-pointer border ${
+                                      decoderMode === mode
+                                        ? 'bg-white text-black border-white'
+                                        : 'bg-zinc-900 text-zinc-400 border-neutral-800 hover:text-white'
+                                    }`}
+                                  >
+                                    {mode}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Aspect Ratio Option */}
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs font-semibold font-sans text-neutral-400">Proporção (Aspect)</span>
+                              <div className="grid grid-cols-3 gap-1.5 mt-1.5">
+                                {(['fit', 'stretch', 'zoom'] as const).map((aspect) => (
+                                  <button
+                                    key={aspect}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setAspectRatio(aspect);
+                                      triggerGestureFeedback('zoom', `Visual: ${aspect.toUpperCase()}`);
+                                    }}
+                                    className={`py-1 text-[9px] font-bold font-mono rounded-lg transition-all cursor-pointer border ${
+                                      aspectRatio === aspect
+                                        ? 'bg-white text-black border-white'
+                                        : 'bg-zinc-900 text-zinc-400 border-neutral-800 hover:text-white'
+                                    }`}
+                                  >
+                                    {aspect.toUpperCase()}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+
+                  {/* Center controls row (Play/Pause button) */}
+                  <div className="flex items-center justify-center w-full pointer-events-auto">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePlayPause();
+                      }}
+                      className="p-5 bg-white/95 text-black rounded-full hover:bg-white hover:scale-110 transition-all active:scale-95 cursor-pointer shadow-2xl"
+                      title={isPlaying ? 'Pausar' : 'Reproduzir'}
+                    >
+                      {isPlaying ? <Pause className="w-8 h-8 fill-current" /> : <Play className="w-8 h-8 fill-current ml-1" />}
+                    </button>
+                  </div>
+
+                  {/* Bottom controls row (Timeline seek and time labels) */}
+                  <div className="w-full pointer-events-auto flex flex-col gap-2 bg-black/40 backdrop-blur-sm p-4 rounded-2xl border border-white/5">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-mono text-zinc-350">{formatTime(currentTime)}</span>
+                      <div className="flex-1 relative py-1 flex items-center">
+                        <input
+                          type="range"
+                          min="0"
+                          max={duration || 120}
+                          step="0.05"
+                          value={currentTime}
+                          disabled={isLocked}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            handleSeekProgress(parseFloat(e.target.value));
+                          }}
+                          className="w-full h-1 bg-white/20 accent-white rounded-lg appearance-none cursor-pointer hover:h-1.5 transition-all"
+                          style={{
+                            background: `linear-gradient(to right, #ffffff 0%, #ffffff ${(currentTime / (duration || 120)) * 100}%, rgba(255, 255, 255, 0.2) ${(currentTime / (duration || 120)) * 100}%, rgba(255, 255, 255, 0.2) 100%)`
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs font-mono text-zinc-355">{formatTime(duration)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
             </div>
 
@@ -1617,7 +2111,12 @@ export default function App() {
                }
              }}
              playsInline
-             className="w-full h-full object-cover bg-black"
+             style={{
+              transform: decoderMode === 'HW+' ? 'translate3d(0, 0, 0)' : 'none',
+              filter: decoderMode === 'HW+' ? 'contrast(1.08) saturate(1.04) brightness(1.01)' : 'none',
+              imageRendering: decoderMode === 'HW+' ? 'pixelated' : 'auto'
+            } as React.CSSProperties}
+            className="w-full h-full object-cover bg-black"
            />
 
            {/* Floating controls overlays */}
